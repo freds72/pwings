@@ -45,7 +45,7 @@ function _update()
   _x+=dx/8
   _y+=dy/8
 
-  _cam:track({_x,5,_y},make_m_from_euler(0.08,time()/32,0))
+  _cam:track({_x,5,_y},make_m_from_euler(0.08,0,0))
 end
 
 function _draw()
