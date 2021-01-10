@@ -1,6 +1,7 @@
 -- pico-wings game code
 -- globals
 local _map,_cells,_cells_map,_grid,_map_lru
+local _cam
 
 function _init()
   -- init maps
@@ -30,9 +31,11 @@ function _init()
   end
   --
   decompress(unpack_map,_map)
+
+  _cam=make_cam()
 end
 
-local _x,_y=0,0
+local _x,_y=64,64
 function _update()
   local dx,dy=0,0
   if(btn(0)) dx=-1
@@ -41,16 +44,132 @@ function _update()
   if(btn(3)) dy=1
   _x+=dx/8
   _y+=dy/8
+
+  _cam:track({_x,5,_y},make_m_from_euler(0.08,time()/32,0))
 end
 
 function _draw()
-  cls()
+  cls(1)
+  palt(0,false)
   if btn(4) then
     spr(0,0,0,16,16)
   else
-    draw_map(_x,_y,8,0)
+    draw_map(_cam)
   end
   pal(_palette,1)
+end
+
+-->8
+-- maths & cam
+function lerp(a,b,t)
+	return a*(1-t)+b*t
+end
+
+function make_v(a,b)
+	return {
+		b[1]-a[1],
+		b[2]-a[2],
+		b[3]-a[3]}
+end
+function v_clone(v)
+	return {v[1],v[2],v[3]}
+end
+function v_dot(a,b)
+	return a[1]*b[1]+a[2]*b[2]+a[3]*b[3]
+end
+function v_scale(v,scale)
+	v[1]*=scale
+	v[2]*=scale
+	v[3]*=scale
+end
+function v_add(v,dv,scale)
+	scale=scale or 1
+	v[1]+=scale*dv[1]
+	v[2]+=scale*dv[2]
+	v[3]+=scale*dv[3]
+end
+function v_lerp(a,b,t)
+	return {
+		lerp(a[1],b[1],t),
+		lerp(a[2],b[2],t),
+		lerp(a[3],b[3],t)
+	}
+end
+function v2_lerp(a,b,t)
+	return {
+		lerp(a[1],b[1],t),
+		lerp(a[2],b[2],t)
+	}
+end
+
+-- matrix functions
+function m_x_v(m,v)
+	local x,y,z=v[1],v[2],v[3]
+	v[1],v[2],v[3]=m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]
+end
+
+function make_m_from_euler(x,y,z)
+		local a,b = cos(x),-sin(x)
+		local c,d = cos(y),-sin(y)
+		local e,f = cos(z),-sin(z)
+  
+    -- yxz order
+  local ce,cf,de,df=c*e,c*f,d*e,d*f
+	 return {
+	  ce+df*b,a*f,cf*b-de,0,
+	  de*b-cf,a*e,df+ce*b,0,
+	  a*d,-b,a*c,0,
+	  0,0,0,1}
+end
+
+-- only invert 3x3 part
+function m_inv(m)
+	m[2],m[5]=m[5],m[2]
+	m[3],m[9]=m[9],m[3]
+	m[7],m[10]=m[10],m[7]
+end
+
+function make_cam()
+	return {
+		pos={0,0,0},
+		track=function(self,pos,m)
+    self.pos=v_clone(pos)
+
+		-- inverse view matrix
+    self.m=m
+    m_inv(self.m)
+	 end
+  }
+end
+
+function z_poly_clip(znear,v,uv)
+	local res,res_uv,v0,uv0={},{},v[#v],uv[#v]
+	local d0=v0[3]-znear
+	for i=1,#v do
+		local v1,uv1=v[i],uv[i]
+		local d1=v1[3]-znear
+		if d1>0 then
+      if d0<=0 then
+        local t=d0/(d0-d1)
+        local nv=v_lerp(v0,v1,t) 
+        local w=128/nv[3]
+        res[#res+1]={x=63.5+nv[1]*w,y=63.5-nv[2]*w,w=w}
+        res_uv[#res_uv+1]=v2_lerp(uv0,uv1,t)
+			end
+      res[#res+1]=v1
+      res_uv[#res_uv+1]=uv1
+		elseif d0>0 then
+      local t=d0/(d0-d1)
+			local nv=v_lerp(v0,v1,t)
+      local w=128/nv[3]
+      res[#res+1]={x=63.5+nv[1]*w,y=63.5-nv[2]*w,w=w}
+      res_uv[#res_uv+1]=v2_lerp(uv0,uv1,t)
+		end
+    v0=v1
+    uv0=uv1
+		d0=d1
+	end
+	return res,res_uv
 end
 
 -->8
@@ -77,46 +196,65 @@ function map_set(i,j,s)
 	end
 end
 
-function draw_map(x,y,z,a)
-	local ca,sa=cos(a),-sin(a)
-	local scale=8/(z+8)
+function draw_map(cam)
+  local ca,sa=cos(a),-sin(a)
+  local m,cx,cy,cz=_cam.m,unpack(_cam.pos)
 	-- project all potential tiles
 	for i,g in pairs(_grid) do
 		-- to cam space
-		local ix,iy,outcode=((i%5)<<5)-x,(i\5<<5)-y,0
-		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+14
-		if ix>16 then outcode=2
-		elseif ix<0 then outcode=1 end
-		if iy>16 then outcode|=8
-		elseif iy<0 then outcode|=4 end
-		-- to screen space
-		g.x=ix<<3
-		g.y=iy<<3
-		g.outcode=outcode
+    local x,y,z,outcode=((i%5)<<5)-cx,-cy,(i\5<<5)-cz,0    
+    x,y,z=m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]
+    
+    if z<0 then outcode=2
+		elseif z>96 then outcode=1 end
+    if 2*x>z then outcode|=4
+		elseif 2*x<-z then outcode|=8 end
+		if 2*y>z then outcode|=16
+    elseif 2*y<-z then outcode|=32 end
+    -- save world space coords for clipping
+    g[1]=x
+    g[2]=y
+    g[3]=z
+    -- to screen space
+    local w=128/z
+		g.x=63.5+x*w
+    g.y=63.5-y*w
+    g.w=w
+    g.outcode=outcode
+    g.clipcode=outcode&1
 	end
 	
 	-- collect visible cells
 	local viz={}
 	for k,cell in pairs(_cells) do
-		-- visible or partially visible?
-		if(cell[1].outcode&
-			 cell[2].outcode&
-			 cell[3].outcode&
-			 cell[4].outcode)==0 then
-			viz[k]=cell
+    -- visible or partially visible?
+		if cell[1].outcode&
+       cell[2].outcode&
+       cell[3].outcode&
+       cell[4].outcode==0 then
+      viz[k]=cell
 		end
 	end
 	
-	-- draw existing cache entries
+  -- draw existing cache entries
+  local tq=0
 	for i,entry in pairs(_map_lru) do
 		local cell=viz[entry.k]
 		if cell then
-			local offset=i<<5
-			tquad(cell,{
-				offset,0,
-				32+offset,0,
-				32+offset,32,
-				offset,32})
+      local offset=i<<5
+      local v,uv=cell,{
+				{offset,0},
+				{32+offset,0},
+				{32+offset,32},
+        {offset,32}}
+      if cell[1].outcode+
+        cell[2].outcode+
+        cell[3].outcode+
+        cell[4].outcode!=0 then
+        v,uv=z_poly_clip(1,v,uv)
+      end
+			tquad(v,uv)
+      tq+=1
 			-- update lru time
 			entry.t=time()
 			-- done
@@ -141,18 +279,27 @@ function draw_map(x,y,z,a)
 		-- add/reuse cache entry
 		_map_lru[mini]={k=k,t=time()}
 		-- fill cache entry
-		local mem=0x2000+(mini<<5)
+		local mem=0x2000|mini<<5
 		for base,v in pairs(_cells_map[k]) do
 			poke4(mem+base,v)
 		end
 		-- draw with fresh cache entry		
-		local offset=mini<<5
-		tquad(cell,{
-			offset,0,
-			32+offset,0,
-			32+offset,32,
-			offset,32})
-	end  
+    local offset=mini<<5
+    tq+=1
+    local v,uv=cell,{
+      {offset,0},
+      {32+offset,0},
+      {32+offset,32},
+      {offset,32}}
+    if cell[1].outcode+
+      cell[2].outcode+
+      cell[3].outcode+
+      cell[4].outcode!=0 then
+      v,uv=z_poly_clip(1,v,uv)
+    end    
+		tquad(v,uv)
+  end  
+  print(tq,2,2,7)
 end
 
 -->8
