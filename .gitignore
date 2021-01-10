@@ -1,0 +1,16 @@
+log.txt
+activity_log.txt
+config.txt
+favourites.txt
+sdl_controllers.txt
+/backup/
+/bbs/
+/carts/demos
+/carts/*.p8.png
+/cdata
+*.bin/
+/.vscode/
+/carts/pwings_*.p8
+/tools/__pycache__
+
+
