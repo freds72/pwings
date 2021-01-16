@@ -1,4 +1,4 @@
--- quad rasterization with tline uv coordinates
+-- polygon rasterization with tline uv coordinates
 function tquad(v,uv)
 	if(#v<3) return
 	local p0,spans=v[#v],{}

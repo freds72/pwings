@@ -1,7 +1,82 @@
 -- pico-wings game code
 -- globals
 local _map,_cells,_cells_map,_grid,_map_lru
-local _cam
+local _cam,_plyr
+
+function make_player(x,y,z)
+	local pitch=0
+	local yaw,dyaw=0,0
+	local rpm,drpm=0,0
+
+	-- create tiles
+	for i=1,8 do
+		for j=0,2 do
+			mset(i-1,j,i+j*16)
+		end
+	end
+
+	return {
+		pos={x,y,z},
+		m=make_m_from_euler(0,0,0),
+		update=function(self)
+			local dr,dy,dp=0,0,0
+			if(btn(4)) dr=1
+			if(btn(0)) dy=-1
+			if(btn(1)) dy=1
+			if(btn(2)) dp=1
+			if(btn(3)) dp=-1			
+			
+			drpm*=0.8
+			drpm+=dr/256
+			rpm+=drpm
+
+			-- pitch
+			pitch*=0.95
+			pitch+=dp/256
+
+			-- yaw
+			dyaw*=0.8
+			dyaw+=dy/1024
+			yaw+=dyaw
+
+			local m=make_m_from_euler(pitch,yaw,0)
+			self.pos=v_add(self.pos,m_fwd(m),rpm)
+			self.m=m
+		end,
+		draw=function(self)
+			-- backup sprite block
+			local buf={}
+			for i=0x0,64*64-1,4 do
+				buf[i]=$i
+			end
+			memcpy(0x0,0x4300,64*64)
+			palt(8,true)
+			--sspr(8,0,58,22,40,50)
+			local p={
+				{x=-29,y=11,w=1},
+				{x=29,y=11,w=1},
+				{x=29,y=-11,w=1},
+				{x=-29,y=-11,w=1}
+			}
+			local c,s=cos(-16*dyaw),-sin(-16*dyaw)
+			for i,v in pairs(p) do
+				local x,y=v.x,v.y
+				v.x=63.5+x*c-y*s
+				v.y=63.5-x*s-y*c
+			end
+
+			tquad(
+				p,
+				{{0,0},{8,0},{8,3},{0,3}})
+			palt()
+			-- restore spritesheet
+			for i,v in pairs(buf) do
+				poke4(i,v)
+			end
+
+		end
+	}
+end
 
 function _init()
   -- init maps
@@ -32,31 +107,56 @@ function _init()
   --
   decompress(unpack_map,_map)
 
-  _cam=make_cam()
+	_cam=make_cam()
+	_plyr=make_player(64,10,64)
+
 end
 
-local _x,_y=64,64
 function _update()
-  local dx,dy=0,0
-  if(btn(0)) dx=-1
-  if(btn(1)) dx=1
-  if(btn(2)) dy=-1
-  if(btn(3)) dy=1
-  _x+=dx/8
-  _y+=dy/8
+	_plyr:update()
+  _cam:track(_plyr.pos,_plyr.m)
+end
 
-  _cam:track({_x,5,_y},make_m_from_euler(0.08,0,0))
+function draw_ground()
+	poke(0x5f38, 1) -- texture map 2x2
+	poke(0x5f39, 1)
+
+	local m=pack(unpack(_cam.m))
+	m_inv(m)
+	local fwd,up,right=m_fwd(m),m_up(m),m_right(m)
+	local x,y,z=unpack(_cam.pos)
+	camera(0,-64)
+	for i=-64,63 do
+		local vu = v_add(fwd, up, -i/128)
+		-- vector toward ground?
+		if (vu[2]<0) then 
+			local vl = v_add(vu,right,-0.5)    -- left ray
+			local vr = v_add(vu,right, 0.5)    -- right ray
+
+			-- y=0 intersection
+			local kl,kr=-y/vl[2],-y/vr[2]
+
+			local tx,tz=vl[1]*kl+x,vl[3]*kl+z 
+			--rectfill(-64,i,64,i,8)
+			tline(0,i,127,i, tx,tz, (vr[1]*kr+x-tx)/128,(vr[3]*kr+z-tz)/128)
+		end
+	end
+	camera()
+	poke(0x5f38, 0)
+	poke(0x5f39, 0)
 end
 
 function _draw()
-  cls(1)
-  palt(0,false)
-  if btn(4) then
-    spr(0,0,0,16,16)
-  else
-    draw_map(_cam)
-  end
-  pal(_palette,1)
+  cls(0)
+	palt(0,false)
+	
+	-- infinite floor
+	draw_ground()
+
+	draw_map(_cam)
+	_plyr:draw()
+
+	pal(_palette,1)
 end
 
 -->8
@@ -84,9 +184,10 @@ function v_scale(v,scale)
 end
 function v_add(v,dv,scale)
 	scale=scale or 1
-	v[1]+=scale*dv[1]
-	v[2]+=scale*dv[2]
-	v[3]+=scale*dv[3]
+	return {
+		v[1]+scale*dv[1],
+		v[2]+scale*dv[2],
+		v[3]+scale*dv[3]}
 end
 function v_lerp(a,b,t)
 	return {
@@ -101,7 +202,20 @@ function v2_lerp(a,b,t)
 		lerp(a[2],b[2],t)
 	}
 end
-
+function v_cross(a,b)
+	local ax,ay,az=a[1],a[2],a[3]
+	local bx,by,bz=b[1],b[2],b[3]
+	return {ay*bz-az*by,az*bx-ax*bz,ax*by-ay*bx}
+end
+function v_normz(v)
+	local x,y,z=v[1],v[2],v[3]
+	local d=x*x+y*y+z*z
+	if d>0.001 then
+		d=sqrt(d)
+		return {x/d,y/d,z/d}
+	end
+	return v
+end
 -- matrix functions
 function m_x_v(m,v)
 	local x,y,z=v[1],v[2],v[3]
@@ -128,17 +242,58 @@ function m_inv(m)
 	m[3],m[9]=m[9],m[3]
 	m[7],m[10]=m[10],m[7]
 end
+-- returns basis vectors from matrix
+function m_right(m)
+	return {m[1],m[2],m[3]}
+end
+function m_up(m)
+	return {m[5],m[6],m[7]}
+end
+function m_fwd(m)
+	return {m[9],m[10],m[11]}
+end
+-- optimized 4x4 matrix mulitply
+function m_x_m(a,b)
+	local a11,a21,a31,_,a12,a22,a32,_,a13,a23,a33,_,a14,a24,a34=unpack(a)
+	local b11,b21,b31,_,b12,b22,b32,_,b13,b23,b33,_,b14,b24,b34=unpack(b)
+
+	return {
+			a11*b11+a12*b21+a13*b31,a21*b11+a22*b21+a23*b31,a31*b11+a32*b21+a33*b31,0,
+			a11*b12+a12*b22+a13*b32,a21*b12+a22*b22+a23*b32,a31*b12+a32*b22+a33*b32,0,
+			a11*b13+a12*b23+a13*b33,a21*b13+a22*b23+a23*b33,a31*b13+a32*b23+a33*b33,0,
+			a11*b14+a12*b24+a13*b34+a14,a21*b14+a22*b24+a23*b34+a24,a31*b14+a32*b24+a33*b34+a34,1
+		}
+end
+function make_m_from_v_angle(up,angle)
+	local fwd={-sin(angle),0,cos(angle)}
+	local right=v_normz(v_cross(up,fwd))
+	fwd=v_cross(right,up)
+	return {
+		right[1],right[2],right[3],0,
+		up[1],up[2],up[3],0,
+		fwd[1],fwd[2],fwd[3],0,
+		0,0,0,1
+	}
+end
 
 function make_cam()
+  local up={0,1,0}
 	return {
 		pos={0,0,0},
-		track=function(self,pos,m)
-    self.pos=v_clone(pos)
-
-		-- inverse view matrix
-    self.m=m
-    m_inv(self.m)
-	 end
+    track=function(self,pos,m)
+      -- inverse view matrix
+      pos=v_add(v_add(pos,m_fwd(m),-10),m_up(m),0)
+      m[2],m[5]=m[5],m[2]
+			m[3],m[9]=m[9],m[3]
+      m[7],m[10]=m[10],m[7]
+      self.m=m_x_m(m,{
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        -pos[1],-pos[2],-pos[3],1
+      })
+      self.pos=pos
+    end
   }
 end
 
@@ -198,15 +353,15 @@ end
 
 function draw_map(cam)
   local ca,sa=cos(a),-sin(a)
-  local m,cx,cy,cz=_cam.m,unpack(_cam.pos)
+  local m=_cam.m
 	-- project all potential tiles
 	for i,g in pairs(_grid) do
 		-- to cam space
-    local x,y,z,outcode=((i%5)<<5)-cx,-cy,(i\5<<5)-cz,0    
+    local x,y,z,outcode=((i%5)<<5),0,(i\5<<5),0   
     x,y,z=m[1]*x+m[5]*y+m[9]*z+m[13],m[2]*x+m[6]*y+m[10]*z+m[14],m[3]*x+m[7]*y+m[11]*z+m[15]
     
-    if z<0 then outcode=2
-		elseif z>96 then outcode=1 end
+    if z<1 then outcode=2
+		elseif z>128 then outcode=1 end
     if 2*x>z then outcode|=4
 		elseif 2*x<-z then outcode|=8 end
 		if 2*y>z then outcode|=16
@@ -221,17 +376,17 @@ function draw_map(cam)
     g.y=63.5-y*w
     g.w=w
     g.outcode=outcode
-    g.clipcode=outcode&1
+    g.clipcode=outcode&2
 	end
 	
 	-- collect visible cells
 	local viz={}
 	for k,cell in pairs(_cells) do
     -- visible or partially visible?
-		if cell[1].outcode&
+		if (cell[1].outcode&
        cell[2].outcode&
        cell[3].outcode&
-       cell[4].outcode==0 then
+       cell[4].outcode)==0 then
       viz[k]=cell
 		end
 	end
@@ -247,10 +402,10 @@ function draw_map(cam)
 				{32+offset,0},
 				{32+offset,32},
         {offset,32}}
-      if cell[1].outcode+
-        cell[2].outcode+
-        cell[3].outcode+
-        cell[4].outcode!=0 then
+      if cell[1].clipcode+
+        cell[2].clipcode+
+        cell[3].clipcode+
+        cell[4].clipcode>0 then
         v,uv=z_poly_clip(1,v,uv)
       end
 			tquad(v,uv)
@@ -291,10 +446,10 @@ function draw_map(cam)
       {32+offset,0},
       {32+offset,32},
       {offset,32}}
-    if cell[1].outcode+
-      cell[2].outcode+
-      cell[3].outcode+
-      cell[4].outcode!=0 then
+    if cell[1].clipcode+
+      cell[2].clipcode+
+      cell[3].clipcode+
+      cell[4].clipcode>0 then
       v,uv=z_poly_clip(1,v,uv)
     end    
 		tquad(v,uv)
