@@ -181,7 +181,8 @@ class TilesExtractor():
           tile = len(pico_gfx)
           pico_gfx.append(data) 
         # sprite 0 cannot be used
-        pico_map.append(tile)        
+        if(tile==1): tile=0
+        pico_map.append(tile)
 
     # map width
     width=width>>3
