@@ -41,6 +41,7 @@ function make_player(x,y,z)
 
 			local m=make_m_from_euler(pitch,yaw,0)
 			self.pos=v_add(self.pos,m_fwd(m),rpm)
+			self.pos[2]=max(self.pos[2])
 			self.m=m
 		end,
 		draw=function(self)
@@ -50,7 +51,28 @@ function make_player(x,y,z)
 				buf[i]=$i
 			end
 			memcpy(0x0,0x4300,64*64)
+			-- draw hud
+			local hud={
+				[0]="090a0b090a0b0c0d0d0e090a0b0c0d0e0",
+				"191a1b191a1b1c1d1d1e191a1b1c1d1e0",
+				"292a2b292a2b2c2d2d2e292a2b2c2d2e0"}
+			for i,b in pairs(hud) do
+				for j=1,#b,2 do
+					spr(tonum("0x"..sub(b,j,j+1)),(j-1)*4,i*8)
+				end
+			end
+			-- 
+			print("alt",58,3,13)
+			local a=tostr(flr(100*self.pos[2]))
+			rectfill(50,9,76,16,10)
+			line(50,17,76,17,11)
+			line(77,9,77,16,11)
+			print(a,76-#a*4,11,2)
 			palt(8,true)
+
+			--
+			print("fuel",109,3,13)
+
 			--sspr(8,0,58,22,40,50)
 			local p={
 				{x=-29,y=11,w=1},
@@ -59,10 +81,11 @@ function make_player(x,y,z)
 				{x=-29,y=-11,w=1}
 			}
 			local c,s=cos(-16*dyaw),-sin(-16*dyaw)
+			local y0=63+rnd(1)
 			for i,v in pairs(p) do
 				local x,y=v.x,v.y
 				v.x=63.5+x*c-y*s
-				v.y=63.5-x*s-y*c
+				v.y=y0-x*s-y*c
 			end
 
 			tquad(
@@ -118,16 +141,15 @@ function _update()
 end
 
 function draw_ground()
-	poke(0x5f38, 1) -- texture map 2x2
+	poke(0x5f38, 1)
 	poke(0x5f39, 1)
 
 	local m=pack(unpack(_cam.m))
 	m_inv(m)
 	local fwd,up,right=m_fwd(m),m_up(m),m_right(m)
 	local x,y,z=unpack(_cam.pos)
-	camera(0,-64)
-	for i=-64,63 do
-		local vu = v_add(fwd, up, -i/128)
+	for i=127,24,-1 do
+		local vu = v_add(fwd, up, (64-i)/128)
 		-- vector toward ground?
 		if (vu[2]<0) then 
 			local vl = v_add(vu,right,-0.5)    -- left ray
@@ -138,10 +160,9 @@ function draw_ground()
 
 			local tx,tz=vl[1]*kl+x,vl[3]*kl+z 
 			--rectfill(-64,i,64,i,8)
-			tline(0,i,127,i, tx,tz, (vr[1]*kr+x-tx)/128,(vr[3]*kr+z-tz)/128)
+			tline(0,i,127,i, tx+time(),tz, (vr[1]*kr+x-tx)/128,(vr[3]*kr+z-tz)/128)
 		end
 	end
-	camera()
 	poke(0x5f38, 0)
 	poke(0x5f39, 0)
 end
@@ -281,8 +302,8 @@ function make_cam()
 	return {
 		pos={0,0,0},
     track=function(self,pos,m)
+      pos=v_add(v_add(pos,m_fwd(m),-10),m_up(m),10)
       -- inverse view matrix
-      pos=v_add(v_add(pos,m_fwd(m),-10),m_up(m),0)
       m[2],m[5]=m[5],m[2]
 			m[3],m[9]=m[9],m[3]
       m[7],m[10]=m[10],m[7]
