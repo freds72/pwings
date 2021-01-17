@@ -1,6 +1,7 @@
 -- polygon rasterization with tline uv coordinates
 function tquad(v,uv)
 	if(#v<3) return
+	assert(#v==#uv,"v/uv mismatch")
 	local p0,spans=v[#v],{}
 	local x0,y0,w0=p0.x,p0.y,p0.w
 	local u0,v0=uv[#v][1]*w0,uv[#v][2]*w0
